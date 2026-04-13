@@ -847,4 +847,5 @@ const Mermaid: React.FC<MermaidProps> = memo(({ children, id, theme }) => {
 
 Mermaid.displayName = 'Mermaid';
 
+export { default as MermaidErrorBoundary } from './MermaidErrorBoundary';
 export default Mermaid;
