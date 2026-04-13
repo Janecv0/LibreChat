@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { ZodError } from 'zod';
 import type { TEndpointsConfig, TModelsConfig, TConfig } from './types';
 import { EModelEndpoint, eModelEndpointSchema, isAgentsEndpoint } from './schemas';
+import { ComponentTypes, SettingTypes, OptionTypes } from './generate';
 import { specsConfigSchema, TSpecsConfig } from './models';
 import { fileConfigSchema } from './file-config';
 import { apiBaseUrl } from './api-endpoints';
@@ -120,11 +121,11 @@ export const azureBaseSchema = z.object({
   instanceName: z.string().optional(),
   deploymentName: z.string().optional(),
   assistants: z.boolean().optional(),
-  addParams: z.record(z.any()).optional(),
+  addParams: z.record(z.union([z.string(), z.number(), z.boolean(), z.null()])).optional(),
   dropParams: z.array(z.string()).optional(),
   version: z.string().optional(),
   baseURL: z.string().optional(),
-  additionalHeaders: z.record(z.any()).optional(),
+  additionalHeaders: z.record(z.string()).optional(),
 });
 
 export type TAzureBaseSchema = z.infer<typeof azureBaseSchema>;
@@ -205,6 +206,8 @@ export const baseEndpointSchema = z.object({
     .optional(),
   titleEndpoint: z.string().optional(),
   titlePromptTemplate: z.string().optional(),
+  /** Maximum characters allowed in a single tool result before truncation. */
+  maxToolResultChars: z.number().positive().optional(),
 });
 
 export type TBaseEndpoint = z.infer<typeof baseEndpointSchema>;
@@ -255,7 +258,7 @@ export const assistantEndpointSchema = baseEndpointSchema.merge(
         userIdQuery: z.boolean().optional(),
       })
       .optional(),
-    headers: z.record(z.any()).optional(),
+    headers: z.record(z.string()).optional(),
   }),
 );
 
@@ -275,12 +278,14 @@ export const defaultAgentCapabilities = [
   AgentCapabilities.chain,
   AgentCapabilities.ocr,
 ];
+export const defaultAgentsRecursionLimit = 127;
 
 export const agentsEndpointSchema = baseEndpointSchema
+  .omit({ baseURL: true })
   .merge(
     z.object({
       /* agents specific */
-      recursionLimit: z.number().optional(),
+      recursionLimit: z.number().optional().default(defaultAgentsRecursionLimit),
       disableBuilder: z.boolean().optional().default(false),
       maxRecursionLimit: z.number().optional(),
       maxCitations: z.number().min(1).max(50).optional().default(30),
@@ -294,6 +299,7 @@ export const agentsEndpointSchema = baseEndpointSchema
     }),
   )
   .default({
+    recursionLimit: defaultAgentsRecursionLimit,
     disableBuilder: false,
     capabilities: defaultAgentCapabilities,
     maxCitations: 30,
@@ -302,6 +308,43 @@ export const agentsEndpointSchema = baseEndpointSchema
   });
 
 export type TAgentsEndpoint = z.infer<typeof agentsEndpointSchema>;
+
+export const paramDefinitionSchema = z.object({
+  key: z.string(),
+  description: z.string().optional(),
+  type: z.nativeEnum(SettingTypes).optional(),
+  default: z.union([z.number(), z.boolean(), z.string(), z.array(z.string())]).optional(),
+  showLabel: z.boolean().optional(),
+  showDefault: z.boolean().optional(),
+  options: z.array(z.string()).optional(),
+  range: z
+    .object({
+      min: z.number(),
+      max: z.number(),
+      step: z.number().optional(),
+    })
+    .optional(),
+  enumMappings: z.record(z.union([z.number(), z.boolean(), z.string()])).optional(),
+  component: z.nativeEnum(ComponentTypes).optional(),
+  optionType: z.nativeEnum(OptionTypes).optional(),
+  columnSpan: z.number().int().nonnegative().optional(),
+  columns: z.number().int().min(1).max(4).optional(),
+  label: z.string().optional(),
+  placeholder: z.string().optional(),
+  labelCode: z.boolean().optional(),
+  placeholderCode: z.boolean().optional(),
+  descriptionCode: z.boolean().optional(),
+  minText: z.number().optional(),
+  maxText: z.number().optional(),
+  minTags: z.number().min(0).optional(),
+  maxTags: z.number().min(0).optional(),
+  includeInput: z.boolean().optional(),
+  descriptionSide: z.enum(['top', 'right', 'bottom', 'left']).optional(),
+  searchPlaceholder: z.string().optional(),
+  selectPlaceholder: z.string().optional(),
+  searchPlaceholderCode: z.boolean().optional(),
+  selectPlaceholderCode: z.boolean().optional(),
+});
 
 export const endpointSchema = baseEndpointSchema.merge(
   z.object({
@@ -317,23 +360,20 @@ export const endpointSchema = baseEndpointSchema.merge(
       fetch: z.boolean().optional(),
       userIdQuery: z.boolean().optional(),
     }),
-    summarize: z.boolean().optional(),
-    summaryModel: z.string().optional(),
     iconURL: z.string().optional(),
     modelDisplayLabel: z.string().optional(),
-    headers: z.record(z.any()).optional(),
-    addParams: z.record(z.any()).optional(),
+    headers: z.record(z.string()).optional(),
+    addParams: z.record(z.union([z.string(), z.number(), z.boolean(), z.null()])).optional(),
     dropParams: z.array(z.string()).optional(),
     customParams: z
       .object({
         defaultParamsEndpoint: z.string().default('custom'),
-        paramDefinitions: z.array(z.record(z.any())).optional(),
+        paramDefinitions: z.array(paramDefinitionSchema).optional(),
       })
       .strict()
       .optional(),
-    customOrder: z.number().optional(),
     directEndpoint: z.boolean().optional(),
-    titleMessageRole: z.string().optional(),
+    titleMessageRole: z.enum(['system', 'user', 'assistant']).optional(),
   }),
 );
 
@@ -342,7 +382,6 @@ export type TEndpoint = z.infer<typeof endpointSchema>;
 export const azureEndpointSchema = z
   .object({
     groups: azureGroupConfigsSchema,
-    plugins: z.boolean().optional(),
     assistants: z.boolean().optional(),
   })
   .and(
@@ -354,9 +393,6 @@ export const azureEndpointSchema = z
         titleModel: true,
         titlePrompt: true,
         titlePromptTemplate: true,
-        summarize: true,
-        summaryModel: true,
-        customOrder: true,
       })
       .partial(),
   );
@@ -499,7 +535,8 @@ const speechTab = z
       .optional()
       .or(
         z.object({
-          engineSTT: z.string().optional(),
+          /** Keep in sync with STTProviders enum (defined below — cannot reference due to eval order) */
+          engineSTT: z.enum(['openai', 'azureOpenAI']).optional(),
           languageSTT: z.string().optional(),
           autoTranscribeAudio: z.boolean().optional(),
           decibelValue: z.number().optional(),
@@ -512,11 +549,12 @@ const speechTab = z
       .optional()
       .or(
         z.object({
-          engineTTS: z.string().optional(),
+          /** Keep in sync with TTSProviders enum (defined below — cannot reference due to eval order) */
+          engineTTS: z.enum(['openai', 'azureOpenAI', 'elevenlabs', 'localai']).optional(),
           voice: z.string().optional(),
           languageTTS: z.string().optional(),
           automaticPlayback: z.boolean().optional(),
-          playbackRate: z.number().optional(),
+          playbackRate: z.number().min(0.25).max(4).optional(),
           cacheTTS: z.boolean().optional(),
         }),
       )
@@ -781,7 +819,6 @@ export type TStartupConfig = {
   sharedLinksEnabled: boolean;
   publicSharedLinksEnabled: boolean;
   analyticsGtmId?: string;
-  instanceProjectId: string;
   bundlerURL?: string;
   staticBundlerURL?: string;
   sharePointFilePickerEnabled?: boolean;
@@ -863,7 +900,7 @@ export const webSearchSchema = z.object({
   searchProvider: z.nativeEnum(SearchProviders).optional(),
   scraperProvider: z.nativeEnum(ScraperProviders).optional(),
   rerankerType: z.nativeEnum(RerankerTypes).optional(),
-  scraperTimeout: z.number().optional(),
+  scraperTimeout: z.number().int().nonnegative().optional(),
   safeSearch: z.nativeEnum(SafeSearchTypes).default(SafeSearchTypes.MODERATE),
   firecrawlOptions: z
     .object({
@@ -872,7 +909,7 @@ export const webSearchSchema = z.object({
       excludeTags: z.array(z.string()).optional(),
       headers: z.record(z.string()).optional(),
       waitFor: z.number().optional(),
-      timeout: z.number().optional(),
+      timeout: z.number().int().nonnegative().optional(),
       maxAge: z.number().optional(),
       mobile: z.boolean().optional(),
       skipTlsVerification: z.boolean().optional(),
@@ -941,13 +978,41 @@ export const memorySchema = z.object({
         provider: z.string(),
         model: z.string(),
         instructions: z.string().optional(),
-        model_parameters: z.record(z.any()).optional(),
+        model_parameters: z.record(z.union([z.string(), z.number(), z.boolean()])).optional(),
       }),
     ])
     .optional(),
 });
 
 export type TMemoryConfig = DeepPartial<z.infer<typeof memorySchema>>;
+
+export const summarizationTriggerSchema = z.object({
+  type: z.enum(['token_count']),
+  value: z.number().positive(),
+});
+
+export const contextPruningSchema = z.object({
+  enabled: z.boolean().optional(),
+  keepLastAssistants: z.number().min(0).max(10).optional(),
+  softTrimRatio: z.number().min(0).max(1).optional(),
+  hardClearRatio: z.number().min(0).max(1).optional(),
+  minPrunableToolChars: z.number().min(0).optional(),
+});
+
+export const summarizationConfigSchema = z.object({
+  enabled: z.boolean().optional(),
+  provider: z.string().optional(),
+  model: z.string().optional(),
+  parameters: z.record(z.union([z.string(), z.number(), z.boolean(), z.null()])).optional(),
+  trigger: summarizationTriggerSchema.optional(),
+  prompt: z.string().optional(),
+  updatePrompt: z.string().optional(),
+  reserveRatio: z.number().min(0).max(1).optional(),
+  maxSummaryTokens: z.number().positive().optional(),
+  contextPruning: contextPruningSchema.optional(),
+});
+
+export type SummarizationConfig = z.infer<typeof summarizationConfigSchema>;
 
 const customEndpointsSchema = z.array(endpointSchema.partial()).optional();
 
@@ -957,6 +1022,7 @@ export const configSchema = z.object({
   ocr: ocrSchema.optional(),
   webSearch: webSearchSchema.optional(),
   memory: memorySchema.optional(),
+  summarization: summarizationConfigSchema.optional(),
   secureImageLinks: z.boolean().optional(),
   imageOutputType: z.nativeEnum(EImageOutputType).default(EImageOutputType.PNG),
   includedTools: z.array(z.string()).optional(),
@@ -996,7 +1062,7 @@ export const configSchema = z.object({
   modelSpecs: specsConfigSchema.optional(),
   endpoints: z
     .object({
-      all: baseEndpointSchema.optional(),
+      all: baseEndpointSchema.omit({ baseURL: true }).optional(),
       [EModelEndpoint.openAI]: baseEndpointSchema.optional(),
       [EModelEndpoint.google]: baseEndpointSchema.optional(),
       [EModelEndpoint.anthropic]: anthropicEndpointSchema.optional(),
@@ -1208,9 +1274,6 @@ export const defaultModels = {
     'gemini-2.5-pro',
     'gemini-2.5-flash',
     'gemini-2.5-flash-lite',
-    // Gemini 2.0 Models
-    'gemini-2.0-flash-001',
-    'gemini-2.0-flash-lite',
   ],
   [EModelEndpoint.anthropic]: sharedAnthropicModels,
   [EModelEndpoint.openAI]: [
@@ -1771,8 +1834,6 @@ export enum Constants {
   SAVED_TAG = 'Saved',
   /** Max number of Conversation starters for Agents/Assistants */
   MAX_CONVO_STARTERS = 4,
-  /** Global/instance Project Name */
-  GLOBAL_PROJECT_NAME = 'instance',
   /** Delimiter for MCP tools */
   mcp_delimiter = '_mcp_',
   /** Prefix for MCP plugins */
@@ -1829,8 +1890,8 @@ export enum LocalStorageKeys {
   LAST_PROMPT_CATEGORY = 'lastPromptCategory',
   /** Key for rendering User Messages as Markdown */
   ENABLE_USER_MSG_MARKDOWN = 'enableUserMsgMarkdown',
-  /** Key for displaying analysis tool code input */
-  SHOW_ANALYSIS_CODE = 'showAnalysisCode',
+  /** Key for auto-expanding tool call details */
+  AUTO_EXPAND_TOOLS = 'autoExpandTools',
   /** Last selected MCP values per conversation ID */
   LAST_MCP_ = 'LAST_MCP_',
   /** Last checked toggle for Code Interpreter API per conversation ID */

@@ -391,8 +391,9 @@ export const mbToBytes = (mb: number): number => mb * megabyte;
 
 const defaultSizeLimit = mbToBytes(512);
 const defaultTokenLimit = 100000;
+const defaultFileLimit = 20;
 const assistantsFileConfig = {
-  fileLimit: 10,
+  fileLimit: defaultFileLimit,
   fileSizeLimit: defaultSizeLimit,
   totalSizeLimit: defaultSizeLimit,
   supportedMimeTypes,
@@ -405,14 +406,14 @@ export const fileConfig = {
     [EModelEndpoint.azureAssistants]: assistantsFileConfig,
     [EModelEndpoint.agents]: assistantsFileConfig,
     [EModelEndpoint.anthropic]: {
-      fileLimit: 10,
+      fileLimit: defaultFileLimit,
       fileSizeLimit: defaultSizeLimit,
       totalSizeLimit: defaultSizeLimit,
       supportedMimeTypes,
       disabled: false,
     },
     default: {
-      fileLimit: 10,
+      fileLimit: defaultFileLimit,
       fileSizeLimit: defaultSizeLimit,
       totalSizeLimit: defaultSizeLimit,
       supportedMimeTypes,
@@ -442,22 +443,7 @@ export const fileConfig = {
   },
 };
 
-const supportedMimeTypesSchema = z
-  .array(z.any())
-  .optional()
-  .refine(
-    (mimeTypes) => {
-      if (!mimeTypes) {
-        return true;
-      }
-      return mimeTypes.every(
-        (mimeType) => mimeType instanceof RegExp || typeof mimeType === 'string',
-      );
-    },
-    {
-      message: 'Each mimeType must be a string or a RegExp object.',
-    },
-  );
+const supportedMimeTypesSchema = z.array(z.string()).optional();
 
 export const endpointFileConfigSchema = z.object({
   disabled: z.boolean().optional(),
@@ -690,22 +676,24 @@ export function mergeFileConfig(dynamic: z.infer<typeof fileConfigSchema> | unde
   }
 
   if (dynamic.ocr !== undefined) {
+    const { supportedMimeTypes: ocrMimeTypes, ...ocrRest } = dynamic.ocr;
     mergedConfig.ocr = {
       ...mergedConfig.ocr,
-      ...dynamic.ocr,
+      ...ocrRest,
     };
-    if (dynamic.ocr.supportedMimeTypes) {
-      mergedConfig.ocr.supportedMimeTypes = convertStringsToRegex(dynamic.ocr.supportedMimeTypes);
+    if (ocrMimeTypes) {
+      mergedConfig.ocr.supportedMimeTypes = convertStringsToRegex(ocrMimeTypes);
     }
   }
 
   if (dynamic.text !== undefined) {
+    const { supportedMimeTypes: textMimeTypes, ...textRest } = dynamic.text;
     mergedConfig.text = {
       ...mergedConfig.text,
-      ...dynamic.text,
+      ...textRest,
     };
-    if (dynamic.text.supportedMimeTypes) {
-      mergedConfig.text.supportedMimeTypes = convertStringsToRegex(dynamic.text.supportedMimeTypes);
+    if (textMimeTypes) {
+      mergedConfig.text.supportedMimeTypes = convertStringsToRegex(textMimeTypes);
     }
   }
 
